@@ -6,11 +6,11 @@
 #
 # Descripción: Generador de código Python a partir del AFD minimizado
 #
-#              Serializa el AFD como una tabla de transiciones estática embebida en un
-#              archivo Python autónomo. El archivo generado contiene toda la lógica de
-#              simulación del analizador léxico: lectura de caracteres, avance de estados,
-#              longest match con backtracking, reporte de posición (línea/columna) y
-#              manejo de errores léxicos. No requiere dependencias externas para ejecutar.
+#              Serializa el AFD como una tabla de transición estática y una tabla de byte-to-symbol-class
+#              table embebida en un archivo Python autónomo. El lexer generado asigna cada
+#              byte de entrada a un id de clase de alfabeto, luego sigue transiciones clave-class.
+#              Longest match, seguimiento de línea/columna, y errores léxicos están incluidos.
+#              No se requieren dependencias externas para ejecutar el output.
 #
 # Autores:     André Pivaral, Roberto Nájera, Genser Catalán
 # Fecha:       23 de Marzo de 2026
@@ -31,13 +31,17 @@ def generate_lexer(dfa: DFA, rules: list, entry_name: str,
     el nombre del entry point, y opcionalmente header/trailer del .yal.
     """
 
-    # Construir tabla de transiciones serializable
-    transition_table = {}
+    # Serializable transition table: symbol class id -> destination (includes EOF class when used)
+    eof_class = dfa.eof_class_id
+    transition_table: dict[int, dict[int, int]] = {}
     for state in dfa.states:
-        trans = {}
-        for sym, target in state.transitions.items():
-            trans[sym] = target
+        trans = dict(state.transitions)
+        if eof_class is not None and state.eof_transition is not None:
+            trans[eof_class] = state.eof_transition
         transition_table[state.id] = trans
+
+    char_class_table = list(dfa.char_to_class)
+    num_symbol_classes = dfa.num_classes
 
     # Mapear estados de aceptación a sus reglas
     accept_info = {}
@@ -76,6 +80,12 @@ import sys
 # ---------------------------------------- TABLA DE TRANSICIONES DEL AFD ----------------------------------------
 
 _TRANSITION_TABLE = {repr(transition_table)}
+
+_CHAR_CLASS_TABLE = {repr(char_class_table)}
+
+_NUM_SYMBOL_CLASSES = {num_symbol_classes}
+
+_EOF_CLASS_ID = {repr(eof_class)}
 
 _ACCEPT_STATES = {repr(accept_info)}
 
@@ -175,9 +185,10 @@ def {entry_name}(text: str) -> list[Token]:
         # Avanzar mientras existan transiciones válidas
         while scan_pos < length:
             ch = ord(text[scan_pos])
+            cls = _CHAR_CLASS_TABLE[ch] if ch < len(_CHAR_CLASS_TABLE) else -1
             trans = _TRANSITION_TABLE.get(current_state, {{}})
-            if ch in trans:
-                current_state = trans[ch]
+            if cls >= 0 and cls in trans:
+                current_state = trans[cls]
                 scan_pos += 1
                 if ch == ord('\\n'):
                     scan_line += 1
@@ -191,7 +202,17 @@ def {entry_name}(text: str) -> list[Token]:
             else:
                 break
 
-        # Verificar aceptación al final del input
+        # Follow EOF-class transitions when input is exhausted (patterns using eof)
+        while scan_pos == length and _EOF_CLASS_ID is not None:
+            trans = _TRANSITION_TABLE.get(current_state, {{}})
+            if _EOF_CLASS_ID not in trans:
+                break
+            current_state = trans[_EOF_CLASS_ID]
+            if current_state in _ACCEPT_STATES:
+                last_accept_pos = scan_pos
+                last_accept_rule = _ACCEPT_STATES[current_state]
+
+        # Accept at end of input without consuming another character
         if scan_pos == length and current_state in _ACCEPT_STATES:
             if scan_pos > last_accept_pos:
                 last_accept_pos = scan_pos
@@ -240,14 +261,14 @@ def main():
         sys.exit(1)
 
     try:
-        tokens = {entry_name}(source)
+        _lex_tokens = {entry_name}(source)
         print("------------------------------------------------------------")
         print(f"  TOKENS RECONOCIDOS — {{filename}}")
         print("------------------------------------------------------------")
-        for tok in tokens:
+        for tok in _lex_tokens:
             print(f"  {{tok}}")
         print("------------------------------------------------------------")
-        print(f"  Total: {{len(tokens)}} tokens")
+        print(f"  Total: {{len(_lex_tokens)}} tokens")
         print("------------------------------------------------------------")
     except LexicalError as e:
         print(e)

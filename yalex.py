@@ -5,17 +5,12 @@
 # UNIVERSIDAD DEL VALLE DE GUATEMALA
 # Diseño de Lenguajes de Programación
 #
-# Descripción: Punto de entrada del generador de analizadores léxicos YALex
+# Descripción: Punto de entrada para el generador de lexers YALex
 #
-#              Orquesta el pipeline completo de 5 fases que transforma un archivo de
-#              especificación .yal en un programa Python funcional capaz de tokenizar
-#              archivos fuente. Las fases son: (1) lectura y preprocesamiento, (2) parsing
-#              de expresiones regulares a AST, (3) construcción de Thompson para generar
-#              AFNs, (4) conversión AFN→AFD con minimización, y (5) generación del código
-#              fuente del analizador léxico con tabla de transiciones estática.
+#              Orquestra un pipeline de 4 fases que convierte una especificación .yal en un lexer Python: (1) lee y preprocesa, (2) parsea expresiones regulares a AST, (3) construye AFD directo (followpos) con alfabeto de clases de símbolo y minimización de Hopcroft, (4) emite fuente lexer autónomo con tablas de transición y clases estáticas.
 #
-# Autores:     André Pivaral, Roberto Nájera, Genser Catalán
-# Fecha:       23 de Marzo de 2026
+# Authors:     André Pivaral, Roberto Nájera, Genser Catalán
+# Fecha:        23 de Marzo de 2026
 # --------------------------------------------------------------------------------------------------------
 
 import sys
@@ -24,8 +19,7 @@ import time
 
 from reader import parse_yalex
 from regex_parser import parse_regex
-from nfa_builder import NFA, build_nfa, combine_nfas
-from dfa_builder import nfa_to_dfa, minimize_dfa
+from dfa_builder import build_dfa_direct, minimize_dfa
 from code_generator import generate_lexer
 
 
@@ -63,11 +57,8 @@ def main():
     t_start = time.time()
 
     # ---------------------------------------- FASE 1 ----------------------------------------
-    # LECTOR Y PREPROCESADOR
-    # ----------------------------------------
-
     print()
-    print("  [1/5] LECTURA Y PREPROCESAMIENTO")
+    print("  [1/4] LECTURA Y PREPROCESAMIENTO")
     print("  ----------------------------------------")
     spec = parse_yalex(input_file)
 
@@ -84,11 +75,8 @@ def main():
     print(f"  Trailer:        {'Sí' if spec.trailer else 'No'}")
 
     # ---------------------------------------- FASE 2 ----------------------------------------
-    # PARSER DE EXPRESIONES REGULARES
-    # ----------------------------------------
-
     print()
-    print("  [2/5] PARSING DE EXPRESIONES REGULARES")
+    print("  [2/4] PARSING DE EXPRESIONES REGULARES")
     print("  ----------------------------------------")
 
     definitions = {}
@@ -108,60 +96,32 @@ def main():
     print(f"  Total: {len(trees)} expresiones parseadas")
 
     # ---------------------------------------- FASE 3 ----------------------------------------
-    # CONSTRUCCIÓN DE AFN (THOMPSON)
-    # ----------------------------------------
-
     print()
-    print("  [3/5] CONSTRUCCIÓN DE AFN (THOMPSON)")
+    print("  [3/4] AFD DIRECTO (FOLLOWPOS) + MINIMIZACIÓN")
     print("  ----------------------------------------")
-    NFA.reset_ids()
-
-    nfas = []
-    for i, tree in enumerate(trees):
-        nfa = build_nfa(tree)
-        nfas.append((nfa, i))
-
-    combined_nfa = combine_nfas(nfas)
-
-    # Contar estados totales del AFN combinado
-    all_states = set()
-    stack = [combined_nfa.start]
-    while stack:
-        s = stack.pop()
-        if s in all_states:
-            continue
-        all_states.add(s)
-        for targets in s.transitions.values():
-            for t in targets:
-                if t not in all_states:
-                    stack.append(t)
-
-    print(f"  AFN combinado:  {len(all_states)} estados")
-
-    # ---------------------------------------- FASE 4 ----------------------------------------
-    # CONVERSIÓN AFN → AFD + MINIMIZACIÓN
-    # ----------------------------------------
-
-    print()
-    print("  [4/5] CONVERSIÓN AFN → AFD + MINIMIZACIÓN")
-    print("  ----------------------------------------")
-    dfa = nfa_to_dfa(combined_nfa)
+    dfa = build_dfa_direct(trees)
     accept_count = sum(1 for s in dfa.states if s.is_accept)
-    print(f"  AFD original:   {len(dfa.states)} estados, {accept_count} de aceptación")
+    byte_classes = len(dfa.class_signatures)
+    ratio = (256 / byte_classes) if byte_classes else 0.0
+    print(f"  Tabla de posiciones (hojas): {dfa.position_count}")
+    print(f"  Clases de byte (alfabeto):   {byte_classes}  (~{ratio:.2f} bytes/clase)")
+    print(f"  AFD inicial:        {len(dfa.states)} estados, {accept_count} de aceptación")
+    if dfa.eof_class_id is not None:
+        print(f"  Clase EOF (patrones eof):    id={dfa.eof_class_id}")
+    else:
+        print(f"  Clase EOF:                   no")
 
     min_dfa = minimize_dfa(dfa)
     min_accept = sum(1 for s in min_dfa.states if s.is_accept)
     trans_count = sum(len(s.transitions) for s in min_dfa.states)
-    print(f"  AFD minimizado: {len(min_dfa.states)} estados, {min_accept} de aceptación")
-    print(f"  Transiciones:   {trans_count}")
-    print(f"  Alfabeto:       {len(min_dfa.alphabet)} símbolos")
+    eof_steps = sum(1 for s in min_dfa.states if s.eof_transition is not None)
+    print(f"  AFD minimizado:     {len(min_dfa.states)} estados, {min_accept} de aceptación")
+    print(f"  Transiciones:       {trans_count} (+ {eof_steps} aristas EOF explícitas)")
+    print(f"  Alfabeto (clases):  {len(min_dfa.alphabet)} ids en uso")
 
-    # ---------------------------------------- FASE 5 ----------------------------------------
-    # GENERACIÓN DE CÓDIGO
-    # ----------------------------------------
-
+    # ---------------------------------------- FASE 4 ----------------------------------------
     print()
-    print("  [5/5] GENERACIÓN DE CÓDIGO")
+    print("  [4/4] GENERACIÓN DE CÓDIGO")
     print("  ----------------------------------------")
 
     output_path = generate_lexer(
