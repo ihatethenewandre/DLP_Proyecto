@@ -1,0 +1,26 @@
+-- Prueba válida: declaraciones, emit, condicional, loop y macro
+let x <- 10;
+let y <- 3.14;
+emit "Hola mundo";
+emit x + y * 2;
+
+when (x > 5) {
+    emit "mayor que 5";
+} otherwise {
+    emit "menor o igual";
+}
+
+repeat {
+    emit x;
+    let x <- x - 1;
+} until (x == 0);
+
+macro saludar(nombre) {
+    emit nombre;
+}
+
+macro cero() {
+    emit 0;
+}
+
+emit saludar(x);

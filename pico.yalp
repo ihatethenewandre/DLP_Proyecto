@@ -1,0 +1,165 @@
+/* pico.yalp — Especificación del parser SLR para el lenguaje PICO */
+
+/* ── Declaración de tokens ── */
+%token INT_LIT
+%token FLOAT_LIT
+%token STRING_LIT
+%token BOOL_LIT
+%token IDENT
+
+%token KW_LET
+%token KW_EMIT
+%token KW_WHEN
+%token KW_OTHERWISE
+%token KW_REPEAT
+%token KW_UNTIL
+%token KW_MACRO
+
+%token ASSIGN
+%token PLUS
+%token MINUS
+%token TIMES
+%token DIV
+%token EQ
+%token NEQ
+%token LT
+%token GT
+%token LEQ
+%token GEQ
+%token AND
+%token OR
+%token NOT
+
+%token LPAREN
+%token RPAREN
+%token LBRACE
+%token RBRACE
+%token SEMICOLON
+%token COMMA
+
+%token WS
+IGNORE WS
+
+%%
+
+/* ── Producciones ── */
+
+/* Programa: una o más sentencias */
+program:
+    statement_list
+;
+
+statement_list:
+    statement_list statement
+  | statement
+;
+
+/* Formas válidas de sentencia */
+statement:
+    let_stmt
+  | emit_stmt
+  | when_stmt
+  | repeat_stmt
+  | macro_def
+;
+
+/* Declaración de variable: let <ident> <- <expr> ; */
+let_stmt:
+    KW_LET IDENT ASSIGN expr SEMICOLON
+;
+
+/* Sentencia de salida: emit <expr> ; */
+emit_stmt:
+    KW_EMIT expr SEMICOLON
+;
+
+/* Condicional */
+when_stmt:
+    KW_WHEN LPAREN expr RPAREN LBRACE statement_list RBRACE
+  | KW_WHEN LPAREN expr RPAREN LBRACE statement_list RBRACE KW_OTHERWISE LBRACE statement_list RBRACE
+;
+
+/* Bucle: repeat { <stmts> } until ( <expr> ) ; */
+repeat_stmt:
+    KW_REPEAT LBRACE statement_list RBRACE KW_UNTIL LPAREN expr RPAREN SEMICOLON
+;
+
+/* Definición de macro */
+macro_def:
+    KW_MACRO IDENT LPAREN param_list RPAREN LBRACE statement_list RBRACE
+  | KW_MACRO IDENT LPAREN RPAREN LBRACE statement_list RBRACE
+;
+
+/* Lista de parámetros */
+param_list:
+    param_list COMMA IDENT
+  | IDENT
+;
+
+/* ── Expresiones (precedencia codificada en niveles de gramática) ── */
+
+/* Nivel 1 — precedencia más baja: OR lógico */
+expr:
+    expr OR expr_and
+  | expr_and
+;
+
+/* Nivel 2 — AND lógico */
+expr_and:
+    expr_and AND expr_eq
+  | expr_eq
+;
+
+/* Nivel 3 — igualdad / desigualdad */
+expr_eq:
+    expr_eq EQ  expr_cmp
+  | expr_eq NEQ expr_cmp
+  | expr_cmp
+;
+
+/* Nivel 4 — comparaciones relacionales */
+expr_cmp:
+    expr_cmp LT  expr_add
+  | expr_cmp GT  expr_add
+  | expr_cmp LEQ expr_add
+  | expr_cmp GEQ expr_add
+  | expr_add
+;
+
+/* Nivel 5 — suma y resta */
+expr_add:
+    expr_add PLUS  expr_mul
+  | expr_add MINUS expr_mul
+  | expr_mul
+;
+
+/* Nivel 6 — multiplicación y división */
+expr_mul:
+    expr_mul TIMES expr_unary
+  | expr_mul DIV   expr_unary
+  | expr_unary
+;
+
+/* Nivel 7 — NOT unario */
+expr_unary:
+    NOT expr_unary
+  | expr_primary
+;
+
+/* Nivel 8 — primarios */
+expr_primary:
+    INT_LIT
+  | FLOAT_LIT
+  | STRING_LIT
+  | BOOL_LIT
+  | IDENT
+  | IDENT LPAREN arg_list RPAREN
+  | IDENT LPAREN RPAREN
+  | LPAREN expr RPAREN
+;
+
+/* Lista de argumentos */
+arg_list:
+    arg_list COMMA expr
+  | expr
+;

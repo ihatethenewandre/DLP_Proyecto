@@ -1,0 +1,3 @@
+-- Prueba inválida: falta el punto y coma
+let x <- 10
+emit x;
