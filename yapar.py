@@ -8,10 +8,13 @@
 # Descripción: Punto de entrada para el generador de parsers YAPar
 #
 #              Orquestra un pipeline de 5 fases que convierte una especificación .yalp
-#              en un parser SLR(1) Python: (1) lee el .yalp, (2) construye la gramática
-#              y calcula FIRST/FOLLOW, (3) construye el autómata LR(0), (4) construye
-#              las tablas SLR, (5) genera el parser Python autónomo.
-#              Opcionalmente invoca YALex sobre el archivo .yal indicado con -l.
+#              en un parser SLR(1) o LALR(1) Python:
+#                (0) Invoca YALex opcionalmente (-l)
+#                (1) Lee el .yalp
+#                (2) Construye la gramática aumentada y calcula FIRST/FOLLOW
+#                (3) Construye el autómata LR(0) + genera visualización HTML y DOT
+#                (4) Construye tablas SLR(1) o LALR(1) según el flag --lalr
+#                (5) Genera el parser Python autónomo
 #
 # Autores:     André Pivaral, Roberto Nájera, Genser Catalán
 # Fecha:       23 de Marzo de 2026
@@ -25,6 +28,8 @@ from yapar_reader import parse_yapar
 from grammar import Grammar
 from lr_automaton import build_canonical_collection, print_automaton
 from slr_table import build_slr_tables, print_tables
+from lalr_table import build_lalr_tables
+from automaton_visualizer import generate_automaton_html, generate_automaton_dot_file
 from parser_codegen import generate_parser
 
 
@@ -33,15 +38,21 @@ from parser_codegen import generate_parser
 def main():
     if len(sys.argv) < 2:
         print("------------------------------------------------------------")
-        print("  YAPAR — GENERADOR DE ANALIZADORES SINTÁCTICOS SLR(1)")
+        print("  YAPAR — GENERADOR DE ANALIZADORES SINTÁCTICOS SLR(1) / LALR(1)")
         print("------------------------------------------------------------")
-        print(f"  Uso: python {sys.argv[0]} <archivo.yalp> [-l <lexer.yal>] [-o <salida.py>]")
+        print(f"  Uso: python {sys.argv[0]} <archivo.yalp> [opciones]")
+        print()
+        print("  Opciones:")
+        print("    -l <lexer.yal>      Invocar YALex sobre el archivo indicado")
+        print("    -o <salida.py>      Nombre del parser generado (default: generated_parser.py)")
+        print("    --lalr              Generar parser LALR(1) en lugar de SLR(1)")
         print("------------------------------------------------------------")
         sys.exit(1)
 
-    input_file = sys.argv[1]
-    lexer_yal  = None
+    input_file  = sys.argv[1]
+    lexer_yal   = None
     output_file = "generated_parser.py"
+    use_lalr    = "--lalr" in sys.argv
 
     if "-l" in sys.argv:
         idx = sys.argv.index("-l")
@@ -59,9 +70,11 @@ def main():
         print(f"  ERROR: No se encontró el archivo '{input_file}'")
         sys.exit(1)
 
+    parser_type = "LALR(1)" if use_lalr else "SLR(1)"
+
     print()
     print("============================================================")
-    print("  YAPAR — GENERADOR DE ANALIZADORES SINTÁCTICOS SLR(1)")
+    print(f"  YAPAR — GENERADOR DE ANALIZADORES SINTÁCTICOS {parser_type}")
     print("============================================================")
 
     t_start = time.time()
@@ -77,7 +90,6 @@ def main():
         print()
         print("  [0/5] INVOCANDO YALEX")
         print("  ----------------------------------------")
-        # Derivar nombre del módulo del lexer desde el archivo de salida del parser
         lexer_out = os.path.splitext(output_file)[0] + "_lexer.py"
         ret = os.system(f'python yalex.py "{lexer_yal}" -o "{lexer_out}"')
         if ret != 0:
@@ -86,7 +98,6 @@ def main():
         lexer_module = os.path.splitext(os.path.basename(lexer_out))[0]
         print(f"  Lexer generado: {lexer_out} (módulo: {lexer_module})")
 
-        # Detectar el nombre del entry point en el .yal
         try:
             from reader import parse_yalex as _parse_yalex
             _spec = _parse_yalex(lexer_yal)
@@ -119,7 +130,7 @@ def main():
 
     # ---------------------------------------- FASE 3 ----------------------------------------
     print()
-    print("  [3/5] AUTÓMATA LR(0) — COLECCIÓN CANÓNICA")
+    print("  [3/5] AUTÓMATA LR(0) — COLECCIÓN CANÓNICA + VISUALIZACIÓN")
     print("  ----------------------------------------")
     states, _ = build_canonical_collection(grammar)
     print(f"  Estados generados: {len(states)}")
@@ -127,11 +138,35 @@ def main():
         trans_str = ", ".join(f"{s}->{t}" for s, t in sorted(state.transitions.items()))
         print(f"    Estado {state.id:3d}: {len(state.items)} items  |  transiciones: {trans_str or '-'}")
 
+    # Generar visualización visual del autómata LR(0)
+    base = os.path.splitext(output_file)[0]
+    html_path = base + "_lr0_automaton.html"
+    dot_path  = base + "_lr0_automaton.dot"
+
+    try:
+        generate_automaton_html(states, grammar, output_file=html_path, parser_type=parser_type)
+        print(f"\n  Visualización HTML: {html_path}")
+    except Exception as e:
+        print(f"\n  ADVERTENCIA: No se pudo generar HTML: {e}")
+
+    try:
+        generate_automaton_dot_file(states, grammar, output_file=dot_path)
+        print(f"  Visualización DOT:  {dot_path}")
+    except Exception as e:
+        print(f"  ADVERTENCIA: No se pudo generar DOT: {e}")
+
     # ---------------------------------------- FASE 4 ----------------------------------------
     print()
-    print("  [4/5] TABLAS SLR(1) — ACTION / GOTO")
+    print(f"  [4/5] TABLAS {parser_type} — ACTION / GOTO")
     print("  ----------------------------------------")
-    tables = build_slr_tables(grammar)
+
+    if use_lalr:
+        tables = build_lalr_tables(grammar)
+        print(f"  Estados LR(1):      {tables.num_lr1_states}")
+        print(f"  Estados LALR(1):    {tables.num_lalr_states}")
+        print(f"  (fusión: {tables.num_lr1_states - tables.num_lalr_states} estados eliminados)")
+    else:
+        tables = build_slr_tables(grammar)
 
     action_entries = sum(len(v) for v in tables.action.values())
     goto_entries   = sum(len(v) for v in tables.goto.values())
@@ -142,10 +177,10 @@ def main():
         print(f"  CONFLICTOS ({len(tables.conflicts)}):")
         for c in tables.conflicts:
             print(c)
-        print("  ADVERTENCIA: La gramática no es SLR(1) pura. "
+        print(f"  ADVERTENCIA: La gramática no es {parser_type} pura. "
               "Se resolvieron conflictos shift>reduce y menor-índice>reduce-reduce.")
     else:
-        print("  Sin conflictos — gramática SLR(1) válida.")
+        print(f"  Sin conflictos — gramática {parser_type} válida.")
 
     # ---------------------------------------- FASE 5 ----------------------------------------
     print()
@@ -164,8 +199,9 @@ def main():
 
     print()
     print("============================================================")
-    print(f"  COMPLETADO EN {t_end - t_start:.3f}s")
-    print(f"  Ejecutar con: python {out_path} <archivo_fuente>")
+    print(f"  COMPLETADO EN {t_end - t_start:.3f}s  [{parser_type}]")
+    print(f"  Parser:    python {out_path} <archivo_fuente>")
+    print(f"  Autómata:  abrir {html_path} en un navegador")
     print("============================================================")
     print()
 
